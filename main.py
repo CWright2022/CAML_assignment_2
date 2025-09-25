@@ -156,7 +156,7 @@ if __name__ == "__main__":
     # load datasets
     train, test_normal, test_attack = load_dataset()
     # create PCA model, fit to training data
-    model = PCA(n_components=2)
+    model = PCA(n_components=4)
     model.fit(train)
     #apply model to datasets (make them 2d)
     test_normal_pca = model.transform(test_normal)
