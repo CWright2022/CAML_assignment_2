@@ -1,11 +1,19 @@
 from mimetypes import init
+from typing import Callable
+from matplotlib.collections import EllipseCollection
 import numpy as np
+import numpy.typing as npt
 import os
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix, classification_report, roc_auc_score, f1_score, accuracy_score
+from sklearn.metrics import confusion_matrix, classification_report, euclidean_distances, roc_auc_score, f1_score, accuracy_score
 
 DATA_DIR = "./dataset"
+
+def euclidean_distance(p1: npt.NDArray[np.float64], p2: npt.NDArray[np.float64]) -> float:
+    d = np.linalg.norm(p1 - p2)
+    return float(d)
+
 
 class KMeans:
     def __init__(self, k_clusters=8, threshold=0.0001):
@@ -117,6 +125,52 @@ class KMeans:
         self.fit(X)
         return self.labels_
 
+
+class DBSCAN:
+    def __init__(self, epsilon: float, min_neighbors: int, distance_metric: Callable[[npt.NDArray[np.float64], npt.NDArray[np.float64]], float], features: int):
+        self.epsilon = epsilon
+        self.min_neighbors = min_neighbors
+
+        # function pointer to hold 
+        self.distance_metric = distance_metric
+        
+        # numpy arrays to hold points
+        self.core_points = np.empty((0, features))
+
+    def set_points(self, points: np.ndarray):
+        self.points = points
+    
+    def find_core_points(self):
+        """
+        Find all core points
+        If a point has at least min_neighbors around it, it can be a core point
+        """
+        # for now doing this badly with n^2 complexity
+        # could change this to be better...but are we allowed to use an imported module like sklearn to help with this?
+        for this_point in self.points:
+            neighbors_counter = 0
+            for point in self.points:
+                if this_point is point:
+                    continue
+                if self.distance_metric(this_point, point) <= self.epsilon:
+                    neighbors_counter += 1
+                    if neighbors_counter >= self.min_neighbors:
+                        break
+            if neighbors_counter >= self.min_neighbors:
+                self.core_points = np.vstack([self.core_points, this_point])
+
+    def classify_point(self, test_point) -> bool:
+        """
+        Classified a test point as anomolous or not anomolous by seeing if it is close enough to any core point
+        Returns True for anomolous or False for not anomolous
+        """
+        for point in self.core_points:
+            if self.distance_metric(point, test_point) <= self.epsilon:
+                return False
+        return True
+
+
+
 def load_dataset() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     '''
     Loads the dataset(s) from the filenames in DATA_DIR. Returns 3 numpy arrays:
@@ -171,47 +225,90 @@ if __name__ == "__main__":
     summarize("Testing (normal)", test_normal)
     summarize("Testing (attack)", test_attack)
     
-    k = 4
-    kmeans = KMeans(k_clusters=k, threshold=0.0001)
-    kmeans.fit(train_pca)
+    # k = 4
+    # kmeans = KMeans(k_clusters=k, threshold=0.0001)
+    # kmeans.fit(train_pca)
     
     
-    train_dists = kmeans.transform(train_pca).min(axis=1)
-    test_normal_dists = kmeans.transform(test_normal_pca).min(axis=1)
-    test_attack_dists = kmeans.transform(test_attack_pca).min(axis=1)
+    # train_dists = kmeans.transform(train_pca).min(axis=1)
+    # test_normal_dists = kmeans.transform(test_normal_pca).min(axis=1)
+    # test_attack_dists = kmeans.transform(test_attack_pca).min(axis=1)
 
-    # Threshold chosen from training distribution (e.g., 95th percentile)
-    threshold = np.percentile(train_dists, 95)
+    # # Threshold chosen from training distribution (e.g., 95th percentile)
+    # threshold = np.percentile(train_dists, 95)
 
-    # Apply threshold to test sets
-    y_true = np.array([0] * len(test_normal_dists) + [1] * len(test_attack_dists))  # 0=normal, 1=attack
-    y_scores = np.concatenate([test_normal_dists, test_attack_dists])               # continuous anomaly scores
-    y_pred = (y_scores > threshold).astype(int)                                    # binary predictions
+    # # Apply threshold to test sets
+    # y_true = np.array([0] * len(test_normal_dists) + [1] * len(test_attack_dists))  # 0=normal, 1=attack
+    # y_scores = np.concatenate([test_normal_dists, test_attack_dists])               # continuous anomaly scores
+    # y_pred = (y_scores > threshold).astype(int)                                    # binary predictions
 
-    # --- Step 5: metrics ---
-    cm = confusion_matrix(y_true, y_pred)
-    report = classification_report(y_true, y_pred, target_names=["Normal", "Attack"], digits=4)
-    auc = roc_auc_score(y_true, y_scores)
-    tn, fp, fn, tp = cm.ravel()
+    # # --- Step 5: metrics ---
+    # cm = confusion_matrix(y_true, y_pred)
+    # report = classification_report(y_true, y_pred, target_names=["Normal", "Attack"], digits=4)
+    # auc = roc_auc_score(y_true, y_scores)
+    # tn, fp, fn, tp = cm.ravel()
 
-    accuracy = accuracy_score(y_true, y_pred)
-    tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0   # Recall for attack class
-    fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0   # False positive rate
-    f1 = f1_score(y_true, y_pred)
+    # accuracy = accuracy_score(y_true, y_pred)
+    # tpr = tp / (tp + fn) if (tp + fn) > 0 else 0.0   # Recall for attack class
+    # fpr = fp / (fp + tn) if (fp + tn) > 0 else 0.0   # False positive rate
+    # f1 = f1_score(y_true, y_pred)
 
-    # Print results
-    print("[INFO] KMeans anomaly detection results")
-    print(f"  PCA components: 2")
-    print(f"  KMeans clusters: {k}")
-    print(f"  Threshold (train 95th percentile): {threshold:.4f}\n")
+    # # Print results
+    # print("[INFO] KMeans anomaly detection results")
+    # print(f"  PCA components: 2")
+    # print(f"  KMeans clusters: {k}")
+    # print(f"  Threshold (train 95th percentile): {threshold:.4f}\n")
 
-    print("Confusion Matrix:")
-    print(cm)
-    print(f"  Accuracy: {accuracy:.4f}")
-    print(f"  TPR: {tpr:.4f}")
-    print(f"  FPR: {fpr:.4f}")
-    print(f"  F1-score: {f1:.4f}")
-    print("\nClassification Report (Precision, Recall, F1):")
-    print(report)
-    print(f"ROC AUC (using distance scores): {auc:.4f}")
+    # print("Confusion Matrix:")
+    # print(cm)
+    # print(f"  Accuracy: {accuracy:.4f}")
+    # print(f"  TPR: {tpr:.4f}")
+    # print(f"  FPR: {fpr:.4f}")
+    # print(f"  F1-score: {f1:.4f}")
+    # print("\nClassification Report (Precision, Recall, F1):")
+    # print(report)
+    # print(f"ROC AUC (using distance scores): {auc:.4f}")
+
+    print()
+    print()
+    # =============================
+    # DBSCAN stuff
+    # =============================
+    dbscan = DBSCAN(epsilon=.01, min_neighbors=4, distance_metric=euclidean_distance, features=4)
+    dbscan.set_points(train_pca)
+    dbscan.find_core_points()
     
+    # Initialize counters
+    tp = 0
+    tn = 0
+    fp = 0
+    fn = 0
+
+    for point in test_attack_pca:  # should all come back TRUE (anomalous)
+        classification = dbscan.classify_point(point)
+        if classification:
+            tp += 1
+        else:
+            fn += 1
+    for point in test_normal_pca:  # should all come back FALSE (not anomalous)
+        classification = dbscan.classify_point(point)
+        if classification:
+            fp += 1
+        else:
+            tn += 1
+
+    # Print DBSCAN Totals
+    print('Totals:')
+    print(f'True positives: {tp}')
+    print(f'True negatives: {tn}')
+    print(f'False positives: {fp}')
+    print(f'False negatives: {fn}')
+    print()
+    accuracy = (tp + tn)/(tp + fp + tn + fn)
+    tpr = tp / (fn + tp)
+    fpr = fp / (tn + fp)
+    f1_score = (2*tp) / (2*tp + fp + fn)
+    print(f'Accuracy: {accuracy*100:.2f}%')
+    print(f'True positive rate: {tpr*100:.2f}%')
+    print(f'False positive rate: {fpr*100:.2f}%')
+    print(f'F1-score: {f1_score:.2f}')
