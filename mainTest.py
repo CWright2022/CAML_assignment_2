@@ -115,8 +115,9 @@ class KMeans:
             centroids = X[randomIndices]
 
             for _ in range(self.maxIters):
-                # Assigns the clusters
-                distances = np.array([[euclideanDistance(x, centroid) for centroid in centroids] for x in X])
+                # Assign clusters using vectorized distances (faster than Python loops)
+                # distances shape: (n_samples, n_centroids)
+                distances = np.linalg.norm(X[:, None, :] - centroids[None, :, :], axis=2)
                 labels = np.argmin(distances, axis=1)
 
                 # Updates the centroids (i.e. handle empty clusters)
@@ -143,53 +144,51 @@ class KMeans:
 
         self.centroids = bestCentroids
 
+    def distanceToCentroids(self, X):
+        """
+        Return the minimum distance to a centroid for each sample.
+        Useful for anomaly detection thresholding.
+        """
+        distances = np.linalg.norm(X[:, None, :] - self.centroids[None, :, :], axis=2)
+        return np.min(distances, axis=1)
+    
     def predict(self, X):
-        distances = np.array([[euclideanDistance(x, centroid) for centroid in self.centroids] for x in X])
+        distances = np.linalg.norm(X[:, None, :] - self.centroids[None, :, :], axis=2)
         return np.argmin(distances, axis = 1)
 
-class DBscan:
+class DBSCAN:
     """
     Simplified DBSCAN for anomaly detection.
-    Uses a grid-based approach to avoid O(n^2) neighbor search.
-    Only finds core points.
+    Finds core points from training data and classifies
+    test points as normal (0) or anomaly (1).
     """
-    def __init__(self, eps = 0.5, minSamples = 5):
+
+    def __init__(self, eps=0.5, minSamples=5):
         self.eps = eps
         self.minSamples = minSamples
-        self.labels = None
+        self.corePoints = None
+        self.points = None
 
     def fit(self, X):
-        n = X.shape[0]
-        self.labels = np.full(n, -1)  # -1 means noise
-        clusterID = 0
-
-        for i in range(n):
-            if self.labels[i] != -1:
-                continue  # Already processed and labeled
-        
-            distances = np.linalg.norm(X - X[i], axis = 1)
+        self.points = X
+        coreList = []
+        for i, point in enumerate(X):
+            distances = np.linalg.norm(X - point, axis=1)
             neighbors = np.where(distances <= self.eps)[0]
+            if len(neighbors) >= self.minSamples:
+                coreList.append(point)
+        self.corePoints = np.array(coreList)
 
-            if len(neighbors) < self.minSamples:
-                self.labels[i] = -1  # Mark as noise
-            else:
-                # Found a core point, start a new cluster
-                self.labels[neighbors] = clusterID
-                clusterID += 1
-
-            # Find neighbors
-            distances = np.linalg.norm(X - X[i], axis=1)
-            neighbors = np.where(distances <= self.eps)[0]
-
-            if len(neighbors) < self.minSamples:
-                self.labels[i] = -1  # Mark as noise
-            else:
-                # Found a core point, start a new cluster
-                self.labels[neighbors] = clusterID
-                clusterID += 1
+    def classifyPoint(self, testPoint):
+        if self.corePoints is None or len(self.corePoints) == 0:
+            return 1  # if no core points, everything is anomaly
+        dists = np.linalg.norm(self.corePoints - testPoint, axis=1)
+        if np.any(dists <= self.eps):
+            return 0
+        return 1
 
     def predict(self, X):
-        return self.labels
+        return np.array([self.classifyPoint(p) for p in X])
 
 
 if __name__ == "__main__":
@@ -216,15 +215,16 @@ if __name__ == "__main__":
     kmeans = KMeans(kClusters = 4, maxIters = 100, threshold = 1e-4, initializationAttempts = 10)
     kmeans.fit(trainNormalPCA)
 
-    trainNormalDistribution = kmeans.predict(trainNormalPCA).min(axis = 1)
-    testNormalDistribution = kmeans.predict(testNormalPCA).min(axis = 1)
-    testAttackDistribution = kmeans.predict(testAttackPCA).min(axis = 1)
+    # Use distance-to-nearest-centroid as anomaly score
+    trainDistances = kmeans.distanceToCentroids(trainNormalPCA)
+    testNormalDistances = kmeans.distanceToCentroids(testNormalPCA)
+    testAttackDistances = kmeans.distanceToCentroids(testAttackPCA)
 
-    # Thresholding based on training set
-    threshold = np.percentile(trainNormalDistribution, 95)
+    # Thresholding based on training distances (95th percentile)
+    threshold = np.percentile(trainDistances, 95)
 
-    yTrue = np.array([0] * len(testNormalDistribution) + [1] * len(testAttackDistribution))
-    yScores = np.concatenate([testNormalDistribution, testAttackDistribution])
+    yTrue = np.array([0] * len(testNormalDistances) + [1] * len(testAttackDistances))
+    yScores = np.concatenate([testNormalDistances, testAttackDistances])
     yPrediction = (yScores > threshold).astype(int)
 
     confusionMatrix, Accuracy, TPR, FPR, F1 = evaluateResults(yTrue, yPrediction)
@@ -232,15 +232,16 @@ if __name__ == "__main__":
     print("Confusion Matrix:\n", confusionMatrix)
     print(f"Accuracy = {Accuracy:.4f}, TPR = {TPR:.4f}, FPR = {FPR:.4f}, F1 = {F1:.4f}")
 
-    print("\n--- DBScan Results ---")
-    dbscan = DBscan(eps = 0.5, minSamples = 5)
-    # Combine normal and attack test sets once
-    xTest = np.vstack((testNormalPCA, testAttackPCA))
+    print("\n--- DBSCAN Results ---")
+    dbscan = DBSCAN(eps=0.5, minSamples=5)
+    dbscan.fit(trainNormalPCA)  # learn core points from training normal
 
-    # Run DBSCAN and get labels
-    dbscan.fit(xTest)
-    labels = dbscan.predict(xTest)
+    testNormalPred = dbscan.predict(testNormalPCA)
+    testAttackPred = dbscan.predict(testAttackPCA)
 
-    confusionMatrix, Accuracy, TPR, FPR, F1 = evaluateResults(yTrue, yPrediction)
+    yPredDBSCAN = np.concatenate([testNormalPred, testAttackPred])
+    yTrue = np.array([0] * len(testNormalPCA) + [1] * len(testAttackPCA))
+
+    confusionMatrix, Accuracy, TPR, FPR, F1 = evaluateResults(yTrue, yPredDBSCAN)
     print("Confusion Matrix:\n", confusionMatrix)
     print(f"Accuracy = {Accuracy:.4f}, TPR = {TPR:.4f}, FPR = {FPR:.4f}, F1 = {F1:.4f}")
