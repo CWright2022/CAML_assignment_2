@@ -1,22 +1,23 @@
-# python -m pip install --upgrade pip
-# python -m pip install numpy matplotlib
+# Required Libraries
+# pip install numpy matplotlib if not already installed
 import matplotlib.pyplot as plt 
 import numpy as np
 import os
 import itertools
 
 # Helper Functions
-
 def euclideanDistance(pointOne, pointTwo):
     """
-    Derives the Euclidean distance between two points.
+    Finds the Euclidean distance (straight-line) between two points.
+    This is the main metric used for clustering.
     """
     eDistance = float(np.linalg.norm(pointOne - pointTwo))
     return eDistance
 
 def loadDataset():
     """
-    Load training, testing normal, and testing attack sets.
+    Loads the training, testing normal, and testing attack datasets.
+    Data is stored as .npy files in the dataset folder.
     """
     dataDirectory = "./dataset"
     trainNormal = np.load(os.path.join(dataDirectory, "training_normal.npy")).astype(np.float64)
@@ -26,18 +27,18 @@ def loadDataset():
 
 def summarizeData(dataName, array):
     """
-    Summarizes the dataset with basic statistics.
+    Prints a quick summary (shape, mean, std dev) of the dataset.
+    Helps us understand if the data looks balanced or has outliers.
     """
     print(f"Summary of {dataName}:")
     print(f"Shape: {array.shape}")
     print(f"Mean: {np.mean(array):.4f}")
     print(f"Standard Deviation: {np.std(array):.4f}")
-    #print(f"Minimum: {np.min(array):.4f}")
-    #print(f"Maximum: {np.max(array):.4f}\n")
 
 def evaluateResults(yTrue, yPred):
     """
-    Build confusion matrix and calculate metrics.
+    Builds a confusion matrix and calculates Accuracy, TPR, FPR, F1.
+    These metrics help  evaluate anomaly detection performance.
     """
     TN, FP, FN, TP = np.bincount(2 * yTrue + yPred, minlength = 4)
     confusionMatrix = np.array([[TN, FP], [FN, TP]])
@@ -49,10 +50,11 @@ def evaluateResults(yTrue, yPred):
 
     return confusionMatrix, Accuracy, TPR, FPR, F1
 
-# Class PCA Implementation
+# PCA Implementation
 class PCA:
     """
-    PCA using numpy eigen decomposition.
+    Principal Component Analysis from scratch.
+    Uses covariance matrix + eigen decomposition.
     """
     def __init__(self, nComponents):
         self.nComponents = nComponents
@@ -60,27 +62,29 @@ class PCA:
         self.components = None
 
     def fit(self, X):
-        # Centers the data
+        # Centers the dataset
         self.mean = np.mean(X, axis = 0)
         xCentered = X - self.mean
 
-        # Computes the covariance matrix
+        # Covariance matrix
         covarianceMatrix = np.cov(xCentered, rowvar = False)
 
-        # Conducts Eigen decomposition
+        # Eigen decomposition
         eigenValues, eigenVectors = np.linalg.eigh(covarianceMatrix)
 
-        # Sorts the eigenvalues and eigenvectors
+        # Sorts eigenvalues in descending order
         sortedIndices = np.argsort(eigenValues)[::-1]
         self.components = eigenVectors[:, sortedIndices[:self.nComponents]]
 
     def transform(self, X):
+        # Projects data onto principal components
         xCentered = X - self.mean
         return np.dot(xCentered, self.components)
     
 def plotPCA(trainNormalPCA, testNormalPCA, testAttackPCA):
     """
-    Plot the PCA results.
+    Visualizes PCA results but only works if 2 components are used.
+    Helps see how normal vs. attack traffic separate.
     """
     plt.figure(figsize = (10, 7))
     plt.scatter(trainNormalPCA[:, 0], trainNormalPCA[:, 1], label = 'Training Normal', alpha = 0.5)
@@ -93,12 +97,12 @@ def plotPCA(trainNormalPCA, testNormalPCA, testAttackPCA):
     plt.grid(True)
     plt.show()
 
+# K-Means Implementation
 class KMeans:
     """
-    K-Means clustering algorithm from scratch.
-    Runs multiple initializations and keeps the best result.
+    K-Means clustering.
+    Runs multiple random initializations and keeps the best result.
     """
-
     def __init__(self, kClusters, maxIters = 100, threshold = 1e-4, initializationAttempts=10):
         self.kClusters = kClusters
         self.maxIters = maxIters
@@ -110,33 +114,35 @@ class KMeans:
         bestInertia = float("inf")
         bestCentroids = None
 
+        # Attempts multiple initializations
         for attempt in range(self.initAttempts):
-            # Randomly initialize centroids
+            # Random starting centroids
             randomIndices = np.random.choice(X.shape[0], self.kClusters, replace = False)
             centroids = X[randomIndices]
 
+            # Repeats until convergence is hit
             for _ in range(self.maxIters):
-                # Assign clusters using vectorized distances (faster than Python loops)
-                # distances shape: (n_samples, n_centroids)
+                
+                # Assign clusters by closest centroid where they are vectorized for speed
                 distances = np.linalg.norm(X[:, None, :] - centroids[None, :, :], axis=2)
                 labels = np.argmin(distances, axis=1)
 
-                # Updates the centroids (i.e. handle empty clusters)
+                # Update centroids
                 newCentroids = []
                 for k in range(self.kClusters):
                     if np.any(labels == k):
                         newCentroids.append(X[labels == k].mean(axis=0))
                     else:
-                        # Reinitializes an empty cluster randomly
+                        # If a cluster is empty, code reassigns randomly
                         newCentroids.append(X[np.random.randint(0, X.shape[0])])
                 newCentroids = np.array(newCentroids)
 
-                # Checks for convergence
+                # Check convergence
                 if np.linalg.norm(newCentroids - centroids) < self.threshold:
                     break
                 centroids = newCentroids
 
-            # Computes the inertia (sum of squared distances to nearest centroid)
+            # Calculates inertia where a lower value is equivalent to better clustering
             inertia = np.sum(np.min(distances, axis=1) ** 2)
 
             if inertia < bestInertia:
@@ -147,52 +153,55 @@ class KMeans:
 
     def distanceToCentroids(self, X):
         """
-        Return the minimum distance to a centroid for each sample.
-        Useful for anomaly detection thresholding.
+        Returns distance to nearest centroid for each point.
+        Useful for anomaly detection threshold.
         """
         distances = np.linalg.norm(X[:, None, :] - self.centroids[None, :, :], axis=2)
         return np.min(distances, axis=1)
     
     def predict(self, X):
+        """
+        Assigns each point to the closest centroid.
+        """
         distances = np.linalg.norm(X[:, None, :] - self.centroids[None, :, :], axis=2)
         return np.argmin(distances, axis = 1)
 
+# DBSCAN Class Implementation
 class DBSCAN:
     """
-    Student-style DBSCAN using a grid-based neighbor search.
-    Works in any dimension (PCA=2, PCA=10, etc.).
-    Faster than O(n^2) since it only checks nearby cells.
+    Student-style DBSCAN using grid-based neighbor search.
+    Identifies dense clusters and flags outliers.
     """
 
     def __init__(self, eps=0.5, minSamples=5):
         self.eps = eps
         self.minSamples = minSamples
-        self.grid = {}       # hash map: cell -> list of (index, point)
-        self.corePoints = [] # list of core points
-        self.dim = None      # dimension of data
+        self.grid = {}       # Cell to points
+        self.corePoints = [] # Core points
+        self.dim = None      # Dataset dimension
 
     def _toCell(self, point):
         """
-        Convert a point into a grid cell index (tuple).
-        Each cell side length = eps.
+        Assigns a point to a grid cell.
+        Each cell size equals eps.
         """
         return tuple((point // self.eps).astype(int))
 
     def fit(self, X):
         """
-        Build the grid and find core points.
+        Builds a grid and identifies core points.
         """
-        self.dim = X.shape[1]  # number of dimensions
+        self.dim = X.shape[1]
         self.grid = {}
 
-        # Assign each point to a grid cell
+        # Assigns points to cells
         for i, point in enumerate(X):
             cell = self._toCell(point)
             if cell not in self.grid:
                 self.grid[cell] = []
             self.grid[cell].append((i, point))
 
-        # Identify core points
+        # Identifies any core points
         self.corePoints = []
         for i, point in enumerate(X):
             if self.countNeighbors(point) >= self.minSamples:
@@ -201,17 +210,14 @@ class DBSCAN:
 
     def countNeighbors(self, point):
         """
-        Count neighbors by checking current cell + surrounding cells.
-        Dimension-independent.
+        Counts neighbors by scanning current and surrounding cells.
         """
         cell = self._toCell(point)
         count = 0
-        # Generate all neighbor cell offsets: [-1, 0, 1]^dim
         for offset in itertools.product([-1, 0, 1], repeat=self.dim):
             neighborCell = tuple(cell[d] + offset[d] for d in range(self.dim))
             if neighborCell in self.grid:
                 for _, otherPoint in self.grid[neighborCell]:
-                    # early exit when we've reached minSamples
                     if count >= self.minSamples:
                         return count
                     if np.linalg.norm(point - otherPoint) <= self.eps:
@@ -220,8 +226,9 @@ class DBSCAN:
 
     def classifyPoint(self, testPoint):
         """
-        Classify a test point as normal (0) if within eps of any core point.
-        Otherwise anomaly (1).
+        Classifies a point as the following:
+        0 = normal (close to cluster core)
+        1 = anomaly (too far from any core)
         """
         if len(self.corePoints) == 0:
             return 1
@@ -230,9 +237,9 @@ class DBSCAN:
 
     def predict(self, X):
         """
-        Predict labels for a set of test points.
+        Predicts labels for all test points.
+        Utilizes chunking to avoid memory blowup.
         """
-        # Vectorized prediction using chunking against corePoints
         if len(self.corePoints) == 0:
             return np.ones(X.shape[0], dtype=int)
 
@@ -252,63 +259,67 @@ class DBSCAN:
             predictions[start:end][within] = 0
         return predictions
 
+# Main Execution
 if __name__ == "__main__":
-    # Load datasets
+    # Load the data
     trainNormal, testNormal, testAttack = loadDataset()
 
-    # Summarizes datasets
+    # Provides the data summaries
     summarizeData("Training Normal", trainNormal)
     summarizeData("Testing Normal", testNormal)
     summarizeData("Testing Attack", testAttack)
 
-    # Applies the PCA
+    # PCA reduction
     pca = PCA(nComponents = 2)
     pca.fit(trainNormal)
     trainNormalPCA = pca.transform(trainNormal)
     testNormalPCA = pca.transform(testNormal)
     testAttackPCA = pca.transform(testAttack)
 
-    # Plots PCA results
+    # Plots the PCA
     plotPCA(trainNormalPCA, testNormalPCA, testAttackPCA)
 
-    # Applies K-Means
-    print("\n--- K-Means Results ---")
+    # K-Means  Execution
+    print("\nK-Means Results:\n")
     kmeans = KMeans(kClusters = 4, maxIters = 100, threshold = 1e-4, initializationAttempts = 10)
     kmeans.fit(trainNormalPCA)
 
-    # Use distance-to-nearest-centroid as anomaly score
+    # Distance-based anomaly scoring
     trainDistances = kmeans.distanceToCentroids(trainNormalPCA)
     testNormalDistances = kmeans.distanceToCentroids(testNormalPCA)
     testAttackDistances = kmeans.distanceToCentroids(testAttackPCA)
 
-    # Thresholding based on training distances (95th percentile)
+    # 95th percentile threshold from training set
     threshold = np.percentile(trainDistances, 95)
 
+    # BuildsS labels
     yTrue = np.array([0] * len(testNormalDistances) + [1] * len(testAttackDistances))
     yScores = np.concatenate([testNormalDistances, testAttackDistances])
     yPrediction = (yScores > threshold).astype(int)
 
+    # Evaluate Metrics for K-Means
     confusionMatrix, Accuracy, TPR, FPR, F1 = evaluateResults(yTrue, yPrediction)
-
     print("Confusion Matrix:\n", confusionMatrix)
     print(f"Accuracy = {Accuracy:.4f}, TPR = {TPR:.4f}, FPR = {FPR:.4f}, F1 = {F1:.4f}")
 
-    print("\n--- DBSCAN Results ---")
+    # DBSCAN Execution
+    print("\nDBSCAN Results:")
     epsValues = [0.005, 0.01, 0.015, 0.02]
     minSamplesValues = [3, 5, 10]
 
     for eps in epsValues:
         for minSamples in minSamplesValues:
-            dbscan = DBSCAN(eps=eps, minSamples=minSamples)
+            dbscan = DBSCAN(eps = eps, minSamples = minSamples)
             dbscan.fit(trainNormalPCA)
 
-            testNormalPred = dbscan.predict(testNormalPCA)
-            testAttackPred = dbscan.predict(testAttackPCA)
+            testNormalPrediction = dbscan.predict(testNormalPCA)
+            testAttackPrediction = dbscan.predict(testAttackPCA)
 
-            yPredDBSCAN = np.concatenate([testNormalPred, testAttackPred])
+            yPredictionDBSCAN = np.concatenate([testNormalPrediction, testAttackPrediction])
             yTrue = np.array([0] * len(testNormalPCA) + [1] * len(testAttackPCA))
 
-            confusionMatrix, Accuracy, TPR, FPR, F1 = evaluateResults(yTrue, yPredDBSCAN)
+            # Evaluate Metrics for DBSCAN
+            confusionMatrix, Accuracy, TPR, FPR, F1 = evaluateResults(yTrue, yPredictionDBSCAN)
             print(f"\neps = {eps}, Minimum Samples = {minSamples}")
             print("Confusion Matrix:\n", confusionMatrix)
             print(f"Accuracy = {Accuracy:.4f}, TPR = {TPR:.4f}, FPR = {FPR:.4f}, F1 = {F1:.4f}")
