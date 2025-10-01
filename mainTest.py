@@ -3,6 +3,7 @@
 import matplotlib.pyplot as plt 
 import numpy as np
 import os
+import itertools
 
 # Helper Functions
 
@@ -158,38 +159,98 @@ class KMeans:
 
 class DBSCAN:
     """
-    Simplified DBSCAN for anomaly detection.
-    Finds core points from training data and classifies
-    test points as normal (0) or anomaly (1).
+    Student-style DBSCAN using a grid-based neighbor search.
+    Works in any dimension (PCA=2, PCA=10, etc.).
+    Faster than O(n^2) since it only checks nearby cells.
     """
 
     def __init__(self, eps=0.5, minSamples=5):
         self.eps = eps
         self.minSamples = minSamples
-        self.corePoints = None
-        self.points = None
+        self.grid = {}       # hash map: cell -> list of (index, point)
+        self.corePoints = [] # list of core points
+        self.dim = None      # dimension of data
+
+    def _toCell(self, point):
+        """
+        Convert a point into a grid cell index (tuple).
+        Each cell side length = eps.
+        """
+        return tuple((point // self.eps).astype(int))
 
     def fit(self, X):
-        self.points = X
-        coreList = []
+        """
+        Build the grid and find core points.
+        """
+        self.dim = X.shape[1]  # number of dimensions
+        self.grid = {}
+
+        # Assign each point to a grid cell
         for i, point in enumerate(X):
-            distances = np.linalg.norm(X - point, axis=1)
-            neighbors = np.where(distances <= self.eps)[0]
-            if len(neighbors) >= self.minSamples:
-                coreList.append(point)
-        self.corePoints = np.array(coreList)
+            cell = self._toCell(point)
+            if cell not in self.grid:
+                self.grid[cell] = []
+            self.grid[cell].append((i, point))
+
+        # Identify core points
+        self.corePoints = []
+        for i, point in enumerate(X):
+            if self.countNeighbors(point) >= self.minSamples:
+                self.corePoints.append(point)
+        self.corePoints = np.array(self.corePoints)
+
+    def countNeighbors(self, point):
+        """
+        Count neighbors by checking current cell + surrounding cells.
+        Dimension-independent.
+        """
+        cell = self._toCell(point)
+        count = 0
+        # Generate all neighbor cell offsets: [-1, 0, 1]^dim
+        for offset in itertools.product([-1, 0, 1], repeat=self.dim):
+            neighborCell = tuple(cell[d] + offset[d] for d in range(self.dim))
+            if neighborCell in self.grid:
+                for _, otherPoint in self.grid[neighborCell]:
+                    # early exit when we've reached minSamples
+                    if count >= self.minSamples:
+                        return count
+                    if np.linalg.norm(point - otherPoint) <= self.eps:
+                        count += 1
+        return count
 
     def classifyPoint(self, testPoint):
-        if self.corePoints is None or len(self.corePoints) == 0:
-            return 1  # if no core points, everything is anomaly
+        """
+        Classify a test point as normal (0) if within eps of any core point.
+        Otherwise anomaly (1).
+        """
+        if len(self.corePoints) == 0:
+            return 1
         dists = np.linalg.norm(self.corePoints - testPoint, axis=1)
-        if np.any(dists <= self.eps):
-            return 0
-        return 1
+        return 0 if np.any(dists <= self.eps) else 1
 
     def predict(self, X):
-        return np.array([self.classifyPoint(p) for p in X])
+        """
+        Predict labels for a set of test points.
+        """
+        # Vectorized prediction using chunking against corePoints
+        if len(self.corePoints) == 0:
+            return np.ones(X.shape[0], dtype=int)
 
+        nTest = X.shape[0]
+        nCore = self.corePoints.shape[0]
+        maxBytes = 200 * 1024 ** 2
+        bytesEntry = 8
+        blockSize = max(1, int(maxBytes / (nCore * bytesEntry)))
+        blockSize = min(max(1, blockSize), 5000)
+
+        predictions = np.ones(nTest, dtype = int)
+        for start in range(0, nTest, blockSize):
+            end = min(nTest, start + blockSize)
+            block = X[start:end]
+            dists = np.linalg.norm(block[:, None, :] - self.corePoints[None, :, :], axis=2)
+            within = np.any(dists <= self.eps, axis = 1)
+            predictions[start:end][within] = 0
+        return predictions
 
 if __name__ == "__main__":
     # Load datasets
@@ -233,15 +294,21 @@ if __name__ == "__main__":
     print(f"Accuracy = {Accuracy:.4f}, TPR = {TPR:.4f}, FPR = {FPR:.4f}, F1 = {F1:.4f}")
 
     print("\n--- DBSCAN Results ---")
-    dbscan = DBSCAN(eps=0.5, minSamples=5)
-    dbscan.fit(trainNormalPCA)  # learn core points from training normal
+    epsValues = [0.005, 0.01, 0.015, 0.02]
+    minSamplesValues = [3, 5, 10]
 
-    testNormalPred = dbscan.predict(testNormalPCA)
-    testAttackPred = dbscan.predict(testAttackPCA)
+    for eps in epsValues:
+        for minSamples in minSamplesValues:
+            dbscan = DBSCAN(eps=eps, minSamples=minSamples)
+            dbscan.fit(trainNormalPCA)
 
-    yPredDBSCAN = np.concatenate([testNormalPred, testAttackPred])
-    yTrue = np.array([0] * len(testNormalPCA) + [1] * len(testAttackPCA))
+            testNormalPred = dbscan.predict(testNormalPCA)
+            testAttackPred = dbscan.predict(testAttackPCA)
 
-    confusionMatrix, Accuracy, TPR, FPR, F1 = evaluateResults(yTrue, yPredDBSCAN)
-    print("Confusion Matrix:\n", confusionMatrix)
-    print(f"Accuracy = {Accuracy:.4f}, TPR = {TPR:.4f}, FPR = {FPR:.4f}, F1 = {F1:.4f}")
+            yPredDBSCAN = np.concatenate([testNormalPred, testAttackPred])
+            yTrue = np.array([0] * len(testNormalPCA) + [1] * len(testAttackPCA))
+
+            confusionMatrix, Accuracy, TPR, FPR, F1 = evaluateResults(yTrue, yPredDBSCAN)
+            print(f"\neps = {eps}, Minimum Samples = {minSamples}")
+            print("Confusion Matrix:\n", confusionMatrix)
+            print(f"Accuracy = {Accuracy:.4f}, TPR = {TPR:.4f}, FPR = {FPR:.4f}, F1 = {F1:.4f}")
