@@ -15,7 +15,7 @@ This repository contains the code and resources for Assignment 2
 ## K-Means 
 - Clusters network traffic and uses distance-to-centroid with a 95th percentile threshold to detect anomalies
 - Parameters are set inside mainTest.py (k=4, maxIters=100, etc.)
-- Run mainTest.py
+- Run mainTest.py using Python3. Our experiments were done with Python 3.13.7
 - Outputs confusion matrix, Accuracy, TPR, FPR, and F1-score
 
 ## DBSCAN
@@ -27,4 +27,5 @@ This repository contains the code and resources for Assignment 2
 ## Dependencies
 - NumPy
 - Matplotlib
+- Scikit-learn
 
