@@ -27,5 +27,4 @@ This repository contains the code and resources for Assignment 2
 ## Dependencies
 - NumPy
 - Matplotlib
-- Scikit-learn
 
